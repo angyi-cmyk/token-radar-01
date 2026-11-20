@@ -3,12 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<meta name="description" content="Token Radar ranks 195 pre-token DeFi protocols by implied value: what a token would be worth if the protocol launched one today, scored from DefiLlama TVL, growth, age and chain breadth.">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
+<a class="skip-link" href="#board">Skip to the ranked board</a>
+<header class="site-head">
+  <div class="site-head-inner">
+    <p class="wordmark"><span class="wordmark-dot" aria-hidden="true"></span>Token&nbsp;Radar</p>
+    <nav class="site-nav" aria-label="Page sections">
+      <a href="#board">Board</a>
+      <a href="#method">How it scores</a>
+      <a href="#about">About the data</a>
+    </nav>
+    <p class="site-head-note">DefiLlama snapshot &middot; 14 Nov 2026</p>
+  </div>
+</header>
 <main id="board" tabindex="-1" aria-busy="true"></main>
+<section class="method" id="method" aria-labelledby="method-title">
+  <div class="method-inner">
+    <h2 id="method-title">How the ranking scores a protocol</h2>
+    <p>Every row on the board is priced by one function of the snapshot, and nothing else. It takes the
+    protocol&rsquo;s total value locked, multiplies it by the sector multiple — the median
+    market-cap-to-TVL ratio of live-token protocols in the same category, shrunk toward the global
+    median when the category has few live comparables — then adjusts for seven-day growth, for how long
+    the protocol has run with no token, and for how many chains it spans. The board recomputes each
+    row in the browser and checks the number against the data file, so a stale figure would show up
+    immediately.</p>
+    <ol class="method-points">
+      <li><b>TVL is the anchor.</b> A protocol holding more value would, all else equal, support a larger token.</li>
+      <li><b>Growth moves the price.</b> Seven-day TVL change is clamped and counted at half weight, so a hot week lifts a row without letting a spike dominate.</li>
+      <li><b>Age is a discount.</b> A protocol that has run for years with no token is scored as less likely to launch one soon than a young one.</li>
+      <li><b>More chains, more reach.</b> Each extra chain adds a small multiplier, capped at ten extra chains.</li>
+    </ol>
+    <p class="method-caveat">Implied value is a model, not a price and not a promise. A protocol on this board may never
+    issue a token, and a token that does launch can trade far from any model. The farm plan on each
+    row is a starting point for research, not financial advice.</p>
+  </div>
+</section>
+<footer class="site-foot" id="about">
+  <div class="site-foot-inner">
+    <p>Token Radar is a research dashboard. Figures come from the DefiLlama protocol index snapshot of
+    14 November 2026; live-token protocols are set aside from the ranking and shown on their own tab,
+    because their market capitalisation is a fact rather than a model. Wrapped, staked and bridged
+    products are kept off the board: their token already trades.</p>
+    <p class="site-foot-small">Built for the make.fun token-radar bounty. No account, no tracking, no network calls: the page
+    reads only the data file shipped beside it.</p>
+  </div>
+</footer>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

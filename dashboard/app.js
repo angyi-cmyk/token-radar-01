@@ -181,6 +181,102 @@
     });
   }
 
+  // One chip per sector: how many pre-token protocols it holds and their combined implied
+  // value. Clicking a chip filters the board to that sector; clicking it again clears it.
+  function sectorTotals() {
+    var byCat = {};
+    DATA.rows.forEach(function (r) {
+      var c = r.category || 'Other';
+      if (!byCat[c]) byCat[c] = { category: c, n: 0, total: 0 };
+      byCat[c].n += 1;
+      byCat[c].total += r.implied_value_usd || 0;
+    });
+    return Object.keys(byCat).map(function (k) { return byCat[k]; }).sort(function (a, b) { return b.total - a.total; });
+  }
+
+  function sectorBar() {
+    var allTotal = DATA.rows.reduce(function (a, r) { return a + (r.implied_value_usd || 0); }, 0);
+    var chips = sectorTotals().map(function (s) {
+      var active = state.category === s.category;
+      return el('button', {
+        type: 'button', class: 'sector-chip', 'aria-pressed': active ? 'true' : 'false',
+        title: s.n + ' pre-token protocols, ' + fmtUsd(s.total) + ' combined implied value',
+        onclick: function () { state.category = active ? 'all' : s.category; writeHash(); render(); }
+      },
+        el('span', { text: s.category }),
+        el('b', { text: fmtUsd(s.total) }),
+        el('span', { class: 'chip-n', text: s.n + (s.n === 1 ? ' row' : ' rows') })
+      );
+    });
+    var all = el('button', {
+      type: 'button', class: 'sector-chip', 'aria-pressed': state.category === 'all' ? 'true' : 'false',
+      title: 'All ' + DATA.rows.length + ' pre-token protocols, ' + fmtUsd(allTotal) + ' combined implied value',
+      onclick: function () { state.category = 'all'; writeHash(); render(); }
+    }, el('span', { text: 'All sectors' }), el('b', { text: fmtUsd(allTotal) }), el('span', { class: 'chip-n', text: DATA.rows.length + ' rows' }));
+    return el('div', { class: 'sector-bar', role: 'group', 'aria-label': 'Filter the board by sector' }, [all].concat(chips));
+  }
+
+  function csvCell(v) {
+    var s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  // Download the rows the board is showing right now — the current filter, sort and tab —
+  // as a plain CSV, built entirely in the browser. No data leaves the page.
+  function downloadCsv() {
+    var head = ['rank', 'protocol', 'category', 'chains', 'tvl_usd', 'change_7d_pct', 'age_days', 'sector_multiple', 'implied_value_usd'];
+    var lines = [head.join(',')];
+    if (state.tab === 'pre-token') {
+      sortedRows(rows()).forEach(function (r) {
+        lines.push([
+          r.rank, csvCell(r.name), csvCell(r.category), csvCell((r.chains || []).join('; ')),
+          r.tvl_usd, r.change_7d === null ? '' : r.change_7d, r.age_days === null ? '' : r.age_days,
+          r.sector_multiple, r.implied_value_usd
+        ].join(','));
+      });
+    } else {
+      DATA.live.forEach(function (r) {
+        lines.push(['live', csvCell(r.name), csvCell(r.category), csvCell((r.chains || []).join('; ')), r.tvl_usd, r.change_7d === null ? '' : r.change_7d, '', '', r.mcap_usd].join(','));
+      });
+    }
+    var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'token-radar-' + (state.tab === 'pre-token' ? 'pre-token' : 'live') + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  // Copy the six farm steps as plain text, for pasting into a farm log. Clipboard API
+  // first, a hidden textarea and execCommand as the fallback for older browsers.
+  function copyFarmPlan(steps, btn) {
+    var text = steps.join('\n');
+    function done() {
+      var old = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = old; }, 1800);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* clipboard unavailable in this browser */ }
+    ta.remove();
+    done();
+  }
+
   function header() {
     return el('header', { class: 'top' },
       el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar' })),
@@ -238,6 +334,7 @@
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chainSelect),
       el('label', { class: 'check', for: 'watch' }, watchBox, 'Watchlist only'),
       el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Token status' }), el('div', { class: 'tabs' }, pre, live)),
+      el('button', { class: 'button export-btn', type: 'button', text: 'Download CSV', title: 'Download the rows shown now as a CSV file', onclick: downloadCsv }),
       el('span', { class: 'count', text: state.tab === 'pre-token' ? rows().length + ' rows shown' : DATA.live.length + ' live-token protocols' })
     );
   }
@@ -383,7 +480,7 @@
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and the protocol records no token: it may never issue one.' })
     ));
-    dialog.appendChild(el('section', { class: 'detail-section' },
+    var planSection = el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
@@ -391,7 +488,10 @@
         var tail = at >= 0 ? s.slice(at + 1) : '';
         return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
       }))
-    ));
+    );
+    var copyBtn = el('button', { class: 'copy-btn', type: 'button', text: 'Copy farm plan', title: 'Copy the six steps as plain text', onclick: function () { copyFarmPlan(steps, copyBtn); } });
+    planSection.appendChild(el('div', { class: 'detail-actions' }, copyBtn));
+    dialog.appendChild(planSection);
     dialog.appendChild(el('p', { class: 'note', text: 'Airdrops are never guaranteed. Never pay anyone to claim, never connect a wallet to a link from a direct message, and never farm with money you cannot afford to leave locked for the full hold.' }));
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
@@ -405,6 +505,7 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(lede());
+    if (state.tab === 'pre-token') shell.appendChild(sectorBar());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
