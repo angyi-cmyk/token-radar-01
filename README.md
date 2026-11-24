@@ -2,27 +2,41 @@
 [![rank](https://make.fun/badge/token-radar-01/angyi-cmyk/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/angyi-cmyk/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-# Token Radar — pre-token protocols ranked by implied value
+# Token Radar — pre-token protocols ranked by fitted implied value
 
 A radar for the make.fun bounty **"Build the best token launch radar"** (`token-radar-01`).
 It reads a sealed DefiLlama snapshot, ranks every pre-token protocol it admits by an implied
-value the model derives from the snapshot's own figures, and shows each protocol's farm plan.
+value fitted from the snapshot's own live-token comparables, and shows each protocol's launch
+odds, 80% range and costed farm verdict.
 
-## The model (`radar-2`, `lib/model.ts`)
+## The model (`radar-3`, `lib/model.ts`)
 
 ```
-implied = round( tvl_usd x sector multiple
-               x (1 + clamp(change_7d, -60, 120) / 100 x 0.5)
-               x (0.6 + min(age_days, 1095) / 1095 x 0.4)
-               x (1 + 0.02 x min(chains - 1, 10)) )
+log(mcap) = a + b·log(TVL) + category offset        (OLS, fit at runtime)
+implied   = max(1, round(exp(a + b·log(TVL) + category offset)))
 ```
 
-- **Sector multiple**: the median market-cap-to-TVL ratio of the live-token protocols in the
-  same category, shrunk toward the global median when the category has few live comps,
-  clamped to [0.05, 2.5]. A category with no live comp takes the global median.
-- **Growth**: the protocol's seven-day TVL change, clamped, worth half its weight.
-- **Maturity**: how long the protocol has run with no token; an unlisted age uses 365 days.
-- **Chain breadth**: wider distribution earns up to x1.20.
+- **Fitted, not assumed.** On the dev snapshot (14 Nov 2026) the fit on 95 live-token
+  comparables gives a = 8.126, b = 0.457 — value grows sublinearly with TVL, not 1:1.
+- **Category offset**: the category's median residual, shrunk toward 0 by n/(n+3); a
+  category with no live comparable gets 0.
+- **Term ledger, tested held-out.** Every candidate term is scored by leave-one-out R²
+  (refitting without the held-out protocol) and walk-forward R²/rho, and kept only when it
+  raises LOO R² over the log-TVL base. On the dev snapshot: log TVL LOO R² +0.131 and
+  category offset +0.148 are KEPT; growth (+0.108), log-age (+0.111) and log-chains
+  (+0.117) are DROPPED. The old radar-2 formula scores LOO R² −0.189 on the same comps —
+  worse than guessing the mean — which is why it was replaced.
+- **Launch odds**: P(launch in 12m / 24m) from the snapshot's cross-section — the cumulative
+  launched share by age, smoothed by monotone interpolation across the bucket edges.
+- **80% range**: implied × exp(±1.28 × residual sd), from the fitted model's leave-one-out
+  residuals (per-category sd where a category has ≥8 live comps, else the global sd).
+- **Costed farm verdicts**: farm cost = gas on the main chain + capital + the farmer's time
+  at $25/hour; minimum viable capital is the capital part. Verdict: FARM when
+  P(12m) × implied × 0.1% ≥ cost, else SKIP. The 0.1% airdrop-share assumption is printed
+  on the dashboard so the arithmetic is checkable.
+- **Full accounting**: the dashboard accounts for all 758 protocols in the snapshot —
+  ranked pre-token (195), live-token (128), token-exists-but-mcap-unrecorded (288), and
+  pre-token excluded by reason (147: product-category 131, versioned 11, wrapped/staked 5).
 
 No protocol name is special-cased. The board covers the snapshot's whole 40-protocol
 watchlist, then adds every further pre-token protocol the rankable rule admits — except
@@ -31,10 +45,12 @@ set aside with their market caps shown, never mixed into the ranking.
 
 ## The dashboard (`dashboard/`)
 
-A static page with no network and no framework: the ranked board, a detail drawer for each
-protocol (the model's own inputs, recomputed in the page, and the farm plan), and filters
-for search, category, chain, watchlist-only, plus a live-token tab. Sortable by rank,
-name, TVL, 7-day growth, age and sector multiple.
+A static page with no network and no framework: the ranked board (implied value, 80% range,
+launch odds, farm cost and verdict per row), a KPI/integrity strip on the cover, the term
+ledger, the launch-odds table and the coverage table, a detail drawer for each protocol
+(the model's own inputs, recomputed in the page, and the farm plan), and filters for search,
+category, chain, watchlist-only, plus a live-token tab. Sortable by rank, name, TVL, 7-day
+growth, age, launch odds and farm cost. CSV export and copy-farm-plan included.
 
 ## Run it
 
@@ -49,7 +65,7 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 ## Files
 
 - `main.ts` — the entrypoint
-- `lib/model.ts` — the model, the board builder, the farm plans
+- `lib/model.ts` — the model, the term ledger, the odds, the intervals, the board builder, the farm plans
 - `dashboard/` — `index.html`, `app.css`, `app.js`
 - `screenshots/` — the board, a detail view and a filtered view of the dashboard
 - `vendor/makefun-board.ts` — make.fun's dashboard-dossier library, vendored

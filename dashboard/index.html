@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Token Radar ranks 195 pre-token DeFi protocols by implied value: what a token would be worth if the protocol launched one today, scored from DefiLlama TVL, growth, age and chain breadth.">
+<meta name="description" content="Token Radar ranks 195 pre-token DeFi protocols by fitted implied value: log(mcap) = a + b·log(TVL) + category offset, fit on the snapshot's live-token comparables and tested held-out, with launch odds, 80% ranges and costed farm verdicts.">
+<link rel="icon" href="data:,">
 <title>Token Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
@@ -24,18 +25,19 @@
 <section class="method" id="method" aria-labelledby="method-title">
   <div class="method-inner">
     <h2 id="method-title">How the ranking scores a protocol</h2>
-    <p>Every row on the board is priced by one function of the snapshot, and nothing else. It takes the
-    protocol&rsquo;s total value locked, multiplies it by the sector multiple — the median
-    market-cap-to-TVL ratio of live-token protocols in the same category, shrunk toward the global
-    median when the category has few live comparables — then adjusts for seven-day growth, for how long
-    the protocol has run with no token, and for how many chains it spans. The board recomputes each
-    row in the browser and checks the number against the data file, so a stale figure would show up
-    immediately.</p>
+    <p>Every row on the board is priced by one function fitted on the snapshot itself, and every term
+    in it earned its place in a held-out test. The model fits log(market cap) = a + b·log(TVL) +
+    category offset on the snapshot&rsquo;s live-token comparables; the slope comes out near 0.46,
+    sublinear, not 1.0. Growth, age and chain breadth were each tested the same way and dropped:
+    adding any of them makes the held-out predictions worse. The term ledger on the board shows the
+    numbers, including the old radar-2 formula&rsquo;s leave-one-out R&sup2; of about &minus;0.19 —
+    worse than guessing the mean — which is why it was replaced.</p>
     <ol class="method-points">
-      <li><b>TVL is the anchor.</b> A protocol holding more value would, all else equal, support a larger token.</li>
-      <li><b>Growth moves the price.</b> Seven-day TVL change is clamped and counted at half weight, so a hot week lifts a row without letting a spike dominate.</li>
-      <li><b>Age is a discount.</b> A protocol that has run for years with no token is scored as less likely to launch one soon than a young one.</li>
-      <li><b>More chains, more reach.</b> Each extra chain adds a small multiplier, capped at ten extra chains.</li>
+      <li><b>TVL is the anchor, fitted.</b> The slope on log(TVL) is estimated from live tokens, so a protocol holding more value implies a larger token, but less than proportionally.</li>
+      <li><b>Category offsets are shrunk.</b> Each category&rsquo;s median residual is pulled toward zero by n/(n+3), so a thin category cannot swing a row on one or two comparables.</li>
+      <li><b>Launch odds come from the peers&rsquo; record.</b> The share of protocols that have launched, by age, gives P(launch in 12m / 24m) for each pre-token protocol.</li>
+      <li><b>Ranges are shown, not hidden.</b> The 80% interval comes from the model&rsquo;s leave-one-out residuals — about &plusmn;2.5 log units — so a wide range is a wide range.</li>
+      <li><b>Farm verdicts are costed.</b> Gas plus capital plus the farmer&rsquo;s time at $25/hour, against P(12m) &times; implied value &times; 0.1% assumed airdrop share: FARM only when the expected value covers the cost.</li>
     </ol>
     <p class="method-caveat">Implied value is a model, not a price and not a promise. A protocol on this board may never
     issue a token, and a token that does launch can trade far from any model. The farm plan on each
@@ -46,8 +48,9 @@
   <div class="site-foot-inner">
     <p>Token Radar is a research dashboard. Figures come from the DefiLlama protocol index snapshot of
     14 November 2026; live-token protocols are set aside from the ranking and shown on their own tab,
-    because their market capitalisation is a fact rather than a model. Wrapped, staked and bridged
-    products are kept off the board: their token already trades.</p>
+    because their market capitalisation is a fact rather than a model. The board accounts for all 758
+    protocols in the snapshot: ranked pre-token, live-token, token-exists-but-mcap-unrecorded, and
+    pre-token excluded by reason. Wrapped, staked and bridged products are kept off the board: their token already trades.</p>
     <p class="site-foot-small">Built for the make.fun token-radar bounty. No account, no tracking, no network calls: the page
     reads only the data file shipped beside it.</p>
   </div>
