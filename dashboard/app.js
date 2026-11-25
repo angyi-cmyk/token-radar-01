@@ -44,6 +44,10 @@
     if (n === null || n === undefined || !isFinite(n)) return 'n/a';
     return (n > 0 ? '+' : '') + n.toFixed(3);
   }
+  function fmtMult(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    return '×' + n.toFixed(2);
+  }
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
   // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
   function impliedOf(row, fit) {
@@ -183,6 +187,7 @@
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'odds') { av = a.p_launch_12m; bv = b.p_launch_12m; }
       else if (key === 'cost') { av = a.farm_cost_usd; bv = b.farm_cost_usd; }
+      else if (key === 'ev') { av = a.farm_ev_multiple; bv = b.farm_ev_multiple; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -233,7 +238,7 @@
   // Download the rows the board is showing right now — the current filter, sort and tab —
   // as a plain CSV, built entirely in the browser. No data leaves the page.
   function downloadCsv() {
-    var head = ['rank', 'protocol', 'category', 'chains', 'tvl_usd', 'change_7d_pct', 'age_days', 'implied_value_usd', 'implied_low_usd', 'implied_high_usd', 'p_launch_12m', 'p_launch_24m', 'farm_cost_usd', 'min_capital_usd', 'verdict'];
+    var head = ['rank', 'protocol', 'category', 'chains', 'tvl_usd', 'change_7d_pct', 'age_days', 'implied_value_usd', 'implied_low_usd', 'implied_high_usd', 'p_launch_12m', 'p_launch_24m', 'farm_cost_usd', 'ev_multiple', 'min_capital_usd', 'verdict'];
     var lines = [head.join(',')];
     if (state.tab === 'pre-token') {
       sortedRows(rows()).forEach(function (r) {
@@ -241,7 +246,7 @@
           r.rank, csvCell(r.name), csvCell(r.category), csvCell((r.chains || []).join('; ')),
           r.tvl_usd, r.change_7d === null ? '' : r.change_7d, r.age_days === null ? '' : r.age_days,
           r.implied_value_usd, r.implied_low_usd, r.implied_high_usd,
-          r.p_launch_12m, r.p_launch_24m, r.farm_cost_usd, r.min_capital_usd, r.verdict
+          r.p_launch_12m, r.p_launch_24m, r.farm_cost_usd, r.farm_ev_multiple, r.min_capital_usd, r.verdict
         ].join(','));
       });
     } else {
@@ -326,13 +331,33 @@
   function kpiStrip() {
     var c = DATA.coverage;
     var covered = c.ranked_pre_token + c.live_token + c.token_no_mcap + c.excluded_total;
+    var farmRows = DATA.rows.filter(function (r) { return r.verdict === 'FARM'; });
+    var weakestEv = farmRows.length ? Math.min.apply(null, farmRows.map(function (r) { return r.farm_ev_multiple; })) : null;
     return el('section', { class: 'panel kpi-strip', 'aria-label': 'Validation summary' },
       el('div', { class: 'kpi' }, el('span', { text: 'Fitted model, leave-one-out R²' }), el('b', { text: fmtR2(DATA.fit.loo_r2) })),
       el('div', { class: 'kpi' }, el('span', { text: 'Walk-forward R² / rho' }), el('b', { text: fmtR2(DATA.fit.wf_r2) + ' / ' + DATA.fit.wf_rho.toFixed(3) })),
+      el('div', { class: 'kpi' }, el('span', { text: 'Rolling-origin R²' }), el('b', { text: fmtR2(DATA.ledger[1].rowf_r2) })),
+      el('div', { class: 'kpi' }, el('span', { text: 'Ten-fold R²' }), el('b', { text: fmtR2(DATA.ledger[1].cv10_r2) })),
+      el('div', { class: 'kpi' }, el('span', { text: 'Weakest FARM row clears cost by' }), el('b', { text: fmtMult(weakestEv) })),
       el('div', { class: 'kpi' }, el('span', { text: 'radar-2 baseline, leave-one-out R²' }), el('b', { text: fmtR2(DATA.baseline.loo_r2) })),
       el('div', { class: 'kpi' }, el('span', { text: 'Live-token comps fitted on' }), el('b', { text: String(DATA.fit.n_comps) })),
       el('div', { class: 'kpi' }, el('span', { text: 'Protocols accounted for' }), el('b', { text: covered + ' / ' + c.total })),
       el('div', { class: 'kpi' }, el('span', { text: 'Model' }), el('b', { text: DATA.model_version }))
+    );
+  }
+
+  // The four-test verdict in one line, on the cover, computed at runtime from the ledger:
+  // the kept term's numbers on all four blind tests, the dropped terms named, and the
+  // baseline for scale. The method section below carries the full ledger and the rejections.
+  function coverVerdict() {
+    var kept = DATA.ledger[1];
+    return el('p', { class: 'cover-verdict' },
+      'Four blind tests, one verdict: ',
+      el('b', { text: 'log TVL + category offset kept' }),
+      ' — leave-one-out R² ' + fmtR2(kept.loo_r2) + ', walk-forward rho ' + kept.wf_rho.toFixed(3) +
+      ', rolling-origin R² ' + fmtR2(kept.rowf_r2) + ', ten-fold R² ' + fmtR2(kept.cv10_r2) +
+      '. Growth, log-age and log-chains fail all four and are dropped; the old radar-2 formula scores ' +
+      fmtR2(DATA.baseline.loo_r2) + ' leave-one-out. Every FARM verdict below also shows by how much it clears its cost.'
     );
   }
 
@@ -411,6 +436,7 @@
         el('td', { class: 'num', text: fmtOdds(r.p_launch_12m) }),
         el('td', { class: 'num', text: fmtOdds(r.p_launch_24m) }),
         el('td', { class: 'num', text: fmtMoney(r.farm_cost_usd) }),
+        el('td', { class: 'num', text: fmtMult(r.farm_ev_multiple) }),
         el('td', null, el('span', { class: 'verdict ' + (r.verdict === 'FARM' ? 'farm' : 'skip'), text: r.verdict }))
       );
       tbody.appendChild(tr);
@@ -430,6 +456,7 @@
             sortHeader('odds', 'P(12m)'),
             el('th', { scope: 'col', text: 'P(24m)' }),
             sortHeader('cost', 'Farm cost'),
+            sortHeader('ev', 'EV ×'),
             el('th', { scope: 'col', text: 'Verdict' })
           )),
           tbody
@@ -552,6 +579,7 @@
       el('p', { class: 'sub', text: 'Fit on ' + f.n_comps + ' live-token comparables (market cap > 0, TVL > 0, known listing date). The category offset is the category\u2019s median residual, shrunk toward 0 by n/(n+8); a category with no live comparable gets 0. The 80% range is implied x exp(±' + f.interval_half_width_log.toFixed(2) + ' log units), the 80th percentile of the absolute leave-one-out residuals — it covers ' + Math.round(f.interval_coverage * 100) + '% of held-out comparables. The ranges are wide, and they are shown honestly.' }),
       ledgerTable(),
       el('p', { class: 'sub', text: 'Walk-forward: comps sorted by listed_at, oldest first; the model is fit on the older half and tested on the newer half — the direction a launch radar actually faces. (radar-3 had this backwards: it fit the newer half and tested the older.) Rolling-origin walk-forward uses five expanding older windows and tests the next slice each time, pooled; ten-fold cross-validation uses deterministic slug folds. Leave-one-out refits without the held-out protocol, category offsets included. A term is KEPT only when adding it raises leave-one-out R² over the log-TVL base — and the four blind tests now agree on the verdicts: the category offset wins leave-one-out (' + fmtR2(DATA.ledger[1].loo_r2) + ') and ten-fold (' + fmtR2(DATA.ledger[1].cv10_r2) + ') and is a wash on rolling-origin, while growth — which won the single-split walk-forward — loses leave-one-out, ten-fold AND rolling-origin, so that win was one 47-comp slice, not a real edge. The reverse walk-forward (fit newer, test older) is a robustness check only: log TVL ' + fmtR2(DATA.ledger[0].revwf_r2) + ', category offset ' + fmtR2(DATA.ledger[1].revwf_r2) + ', growth ' + fmtR2(DATA.ledger[2].revwf_r2) + '. The old radar-2 formula scores ' + fmtR2(DATA.baseline.loo_r2) + ' leave-one-out on the same comps — worse than guessing the mean — which is why it was replaced.' }),
+      el('p', { class: 'sub', text: 'radar-6 hunted for a stronger value signal and found none it could keep. Eight more snapshot-computable candidates were run through the same four tests — log TVL crossed with log-age, growth and log-chains, log-age crossed with growth, a multichain dummy, an Ethereum dummy, within-category TVL deviation, growth squared, log category size, a young-age dummy, and log TVL crossed with category size — and every one failed at least one test. The closest, log TVL × category size, passes the four headline tests by about 0.01 on three of them while its reverse walk-forward collapses (rho 0.214 vs 0.377) and its implied elasticities run from −0.26 to +1.13, so it was rejected as validation-set fitting. The 90-day TVL momentum from DefiLlama history passes all four tests in analysis, but the snapshot carries no TVL history — only the 7-day change — so this entry cannot compute it and it stays out; the 30-day momentum fails all four outright. The value model is therefore unchanged from radar-5. What radar-6 adds is display: every farm verdict now carries its expected-value multiple, so the reader sees by how much each row clears its cost.' }),
       el('h3', { text: 'Launch odds' }),
       el('p', { class: 'sub', text: 'P(launch in 12m / 24m) comes from a discrete-time hazard fit: logistic regression of "has launched" on log(age) over the ' + DATA.odds_model.n_fit + ' live-vs-pre-token protocols with a known listing date, P(launched by age) = sigmoid(' + DATA.odds_model.intercept.toFixed(3) + ' + ' + DATA.odds_model.log_age_coef.toFixed(3) + ' x log(age+1)), then P = [G(age + 12m) − G(age)] / [1 − G(age)]. A protocol with no listing date uses 365 days. Held-out, the logistic ties the old age-bucket curve on leave-one-out log-loss (' + DATA.odds_model.loo_logloss.toFixed(3) + ' vs ' + DATA.odds_model.bucket_loo_logloss.toFixed(3) + ') and beats it clearly on a listed_at time split (' + DATA.odds_model.time_split_logloss.toFixed(3) + ' vs ' + DATA.odds_model.bucket_time_split_logloss.toFixed(3) + ') — the bucket curve cannot extrapolate to young ages it has never seen. It also fixes the bucket curve\u2019s artefacts in P(12m): 0.382 at age 730 days (from the 0.250 → 0.537 bucket jump) and 0.000 past 1460 days. TVL, category and a quadratic in log age were all tested as extra predictors and add nothing out-of-time, so the model stays age-only; the 232 token-exists-but-mcap-unrecorded entries are excluded, as their tokens predate their listing dates. This is a cross-sectional estimate from one snapshot, not a forecast — and age barely separates 12-month odds (P(12m) runs only 0.11–0.15 across the board), so the farm verdict below is driven mostly by implied value.' }),
       oddsTable(),
@@ -632,9 +660,10 @@
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'Farm cost (gas + capital + time at $' + m.hourly_rate_usd + '/h)' }), el('b', { class: 'num', text: fmtMoney(row.farm_cost_usd) })),
         el('div', null, el('span', { text: 'Minimum viable capital' }), el('b', { class: 'num', text: fmtMoney(row.min_capital_usd) })),
-        el('div', null, el('span', { text: 'Expected value: P(12m) x implied x 0.1%' }), el('b', { class: 'num', text: fmtMoney(Math.round(row.p_launch_12m * row.implied_value_usd * m.airdrop_share * 100) / 100) }))
+        el('div', null, el('span', { text: 'Expected value: P(12m) x implied x 0.1%' }), el('b', { class: 'num', text: fmtMoney(Math.round(row.p_launch_12m * row.implied_value_usd * m.airdrop_share * 100) / 100) })),
+        el('div', null, el('span', { text: 'Expected-value multiple (EV ÷ cost)' }), el('b', { class: 'num', text: fmtMult(row.farm_ev_multiple) }))
       ),
-      el('p', { class: 'sub', text: 'FARM when the expected value covers the cost, else SKIP. The 0.1% airdrop share is a stated assumption.' })
+      el('p', { class: 'sub', text: 'FARM when the expected value covers the cost — a multiple of ×1.00 or more — else SKIP. The multiple shows by how much the row clears the bar, so a FARM at ×1.05 is not the same conviction as one at ×8. The 0.1% airdrop share is a stated assumption.' })
     );
     dialog.appendChild(farmSection);
     var planSection = el('section', { class: 'detail-section' },
@@ -663,6 +692,7 @@
     shell.appendChild(header());
     shell.appendChild(lede());
     shell.appendChild(kpiStrip());
+    shell.appendChild(coverVerdict());
     if (state.tab === 'pre-token') shell.appendChild(sectorBar());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());

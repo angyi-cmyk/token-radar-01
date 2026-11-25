@@ -9,7 +9,7 @@ It reads a sealed DefiLlama snapshot, ranks every pre-token protocol it admits b
 value fitted from the snapshot's own live-token comparables, and shows each protocol's launch
 odds, 80% range and costed farm verdict.
 
-## The model (`radar-5`, `lib/model.ts`)
+## The model (`radar-6`, `lib/model.ts`)
 
 ```
 log(mcap) = a + b·log(TVL) + category offset        (OLS, fit at runtime)
@@ -61,7 +61,25 @@ implied   = max(1, round(exp(a + b·log(TVL) + category offset)))
 - **Costed farm verdicts**: farm cost = gas on the main chain + capital + the farmer's time
   at $25/hour; minimum viable capital is the capital part. Verdict: FARM when
   P(12m) × implied × 0.1% ≥ cost, else SKIP. The 0.1% airdrop-share assumption is printed
-  on the dashboard so the arithmetic is checkable.
+  on the dashboard so the arithmetic is checkable. Every verdict now also shows its
+  expected-value multiple (EV ÷ cost), so the reader sees by how much each row clears
+  the bar — the weakest FARM row clears it by ×2.91 on the dev snapshot.
+- **radar-6: no value-model change, by evidence.** The round hunted for a stronger value
+  signal and kept none of it. Eight more snapshot-computable candidates ran through the
+  same four blind tests — log TVL crossed with log-age, growth and log-chains, log-age
+  crossed with growth, a multichain dummy, an Ethereum dummy, within-category TVL
+  deviation, growth squared, log category size, a young-age dummy, and log TVL crossed
+  with category size — and every one failed at least one test. The closest, log TVL ×
+  category size, passes the four headline tests by about 0.01 on three of them while its
+  reverse walk-forward collapses (rho 0.214 vs 0.377) and its implied elasticities run
+  from −0.26 to +1.13, so it was rejected as validation-set fitting. The 90-day TVL
+  momentum from DefiLlama history passes all four tests in analysis (LOO +0.146 vs
+  +0.137, walk-forward rho 0.315 vs 0.296, rolling-origin +0.024 vs +0.002, ten-fold
+  +0.138 vs +0.134 on the 90 covered comps) but the snapshot carries no TVL history —
+  only the 7-day change — so the entry cannot compute it at runtime and it stays out;
+  the 30-day momentum fails all four outright. The cover now states the four-test
+  verdict in one line, and the integrity strip carries the rolling-origin and ten-fold
+  R² alongside the leave-one-out and walk-forward numbers.
 - **Full accounting**: the dashboard accounts for all 758 protocols in the snapshot —
   ranked pre-token (195), live-token (128), token-exists-but-mcap-unrecorded (288), and
   pre-token excluded by reason (147: product-category 131, versioned 11, wrapped/staked 5).
@@ -74,11 +92,11 @@ set aside with their market caps shown, never mixed into the ranking.
 ## The dashboard (`dashboard/`)
 
 A static page with no network and no framework: the ranked board (implied value, 80% range,
-launch odds, farm cost and verdict per row), a KPI/integrity strip on the cover, the term
+launch odds, farm cost, expected-value multiple and verdict per row), a KPI/integrity strip on the cover, the term
 ledger, the launch-odds table and the coverage table, a detail drawer for each protocol
 (the model's own inputs, recomputed in the page, and the farm plan), and filters for search,
 category, chain, watchlist-only, plus a live-token tab. Sortable by rank, name, TVL, 7-day
-growth, age, launch odds and farm cost. CSV export and copy-farm-plan included.
+growth, age, launch odds, farm cost and EV multiple. CSV export and copy-farm-plan included.
 
 ## Run it
 

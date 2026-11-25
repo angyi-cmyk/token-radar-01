@@ -1,4 +1,4 @@
-// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-6): one snapshot of the protocol universe in, one ranked board out.
 //
 // radar-5 replaces radar-2's hand-set formula with a model fitted at runtime from the sealed
 // snapshot's own live-token comparables, and it shows the evidence for every term it keeps:
@@ -51,6 +51,20 @@
 //           printed on the dashboard so the arithmetic is checkable.
 //   cover   the dashboard accounts for every protocol in the snapshot: ranked pre-token,
 //           live-token, pre-token excluded by reason, and token-exists-but-mcap-unrecorded.
+//   radar-6 the value model is unchanged: the hunt for a stronger value signal tested eight
+//           snapshot-computable candidates (logTVL × log-age, logTVL × growth, logTVL ×
+//           log-chains, log-age × growth, multichain and Ethereum dummies, within-category
+//           TVL deviation, growth², log category size, young-age dummy, logTVL × category
+//           size) plus 30/90-day TVL momentum from DefiLlama history, and none was adopted.
+//           The 90-day momentum passes all four blind tests in analysis (LOO +0.146 vs
+//           +0.137, walk-forward rho 0.315 vs 0.296, rolling-origin +0.024 vs +0.002,
+//           ten-fold +0.138 vs +0.134 on the 90 covered comps) but the snapshot carries no
+//           TVL history, so the entry cannot compute it at runtime and it stays out. The
+//           logTVL × category-size interaction passes the four headline tests by ~0.01 on
+//           three of them while its reverse walk-forward collapses (rho 0.214 vs 0.377) and
+//           its implied elasticities run −0.26 to +1.13, so it is rejected as validation-set
+//           fitting. What radar-6 adds instead: the expected-value multiple (EV ÷ cost) on
+//           every farm verdict, and the cover states the four-test verdict in one line.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds every
 // further pre-token protocol the radar's own rule admits. A protocol is pre-token when its index entry
@@ -111,7 +125,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -226,6 +240,8 @@ export interface FarmEconomics {
   cost_usd: number;
   min_capital_usd: number;
   expected_value_usd: number;
+  /** Expected value divided by cost: FARM exactly when this is >= 1. Shows how much a row clears the bar by, not just which side of it. */
+  ev_multiple: number;
   verdict: 'FARM' | 'SKIP';
 }
 
@@ -279,6 +295,7 @@ export interface RadarRow {
   p_launch_24m: number;
   farm_cost_usd: number;
   min_capital_usd: number;
+  farm_ev_multiple: number;
   verdict: 'FARM' | 'SKIP';
   cat_offset: number;
 }
@@ -1067,6 +1084,7 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
   const timeUsd = Math.round(((timeMinutes / 60) * model.hourly_rate_usd) * 100) / 100;
   const costUsd = Math.round((gasUsd + capital + timeUsd) * 100) / 100;
   const expected = Math.round(p12m * implied * model.airdrop_share * 100) / 100;
+  const evMultiple = Math.round((expected / costUsd) * 100) / 100;
   return {
     gas_usd: gasUsd,
     time_minutes: timeMinutes,
@@ -1075,6 +1093,7 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
     cost_usd: costUsd,
     min_capital_usd: capital,
     expected_value_usd: expected,
+    ev_multiple: evMultiple,
     verdict: expected >= costUsd ? 'FARM' : 'SKIP',
   };
 }
@@ -1293,6 +1312,7 @@ export function radarRow(row: BoardRow): RadarRow {
     p_launch_24m: row.p_launch_24m,
     farm_cost_usd: row.farm.cost_usd,
     min_capital_usd: row.farm.min_capital_usd,
+    farm_ev_multiple: row.farm.ev_multiple,
     verdict: row.farm.verdict,
     cat_offset: row.model.cat_offset,
   };
