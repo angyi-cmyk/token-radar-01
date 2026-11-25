@@ -9,7 +9,7 @@ It reads a sealed DefiLlama snapshot, ranks every pre-token protocol it admits b
 value fitted from the snapshot's own live-token comparables, and shows each protocol's launch
 odds, 80% range and costed farm verdict.
 
-## The model (`radar-3`, `lib/model.ts`)
+## The model (`radar-4`, `lib/model.ts`)
 
 ```
 log(mcap) = a + b·log(TVL) + category offset        (OLS, fit at runtime)
@@ -18,18 +18,25 @@ implied   = max(1, round(exp(a + b·log(TVL) + category offset)))
 
 - **Fitted, not assumed.** On the dev snapshot (14 Nov 2026) the fit on 95 live-token
   comparables gives a = 8.126, b = 0.457 — value grows sublinearly with TVL, not 1:1.
-- **Category offset**: the category's median residual, shrunk toward 0 by n/(n+3); a
-  category with no live comparable gets 0.
+- **Category offset**: the category's median residual, shrunk toward 0 by n/(n+8); a
+  category with no live comparable gets 0. (radar-3 used n/(n+3); the stronger shrinkage
+  raises LOO R² and improves walk-forward, because small-n category offsets are mostly noise.)
 - **Term ledger, tested held-out.** Every candidate term is scored by leave-one-out R²
-  (refitting without the held-out protocol) and walk-forward R²/rho, and kept only when it
-  raises LOO R² over the log-TVL base. On the dev snapshot: log TVL LOO R² +0.131 and
-  category offset +0.148 are KEPT; growth (+0.108), log-age (+0.111) and log-chains
-  (+0.117) are DROPPED. The old radar-2 formula scores LOO R² −0.189 on the same comps —
-  worse than guessing the mean — which is why it was replaced.
+  (refitting without the held-out protocol) and walk-forward R²/rho — fit on the older
+  half of comps, tested on the newer half — and kept only when it raises LOO R² over the
+  log-TVL base. On the dev snapshot: log TVL LOO R² +0.131 and category offset +0.153 are
+  KEPT; growth (+0.108), log-age (+0.111) and log-chains (+0.117) are DROPPED. The old
+  radar-2 formula scores LOO R² −0.189 on the same comps — worse than guessing the mean —
+  which is why it was replaced. radar-4 fixed the walk-forward split, which radar-3 had
+  backwards (it fit the newer half and tested the older); the corrected numbers are lower
+  across the board — log TVL walk-forward rho 0.352, not 0.455 — and the two blind tests
+  now visibly disagree on the category offset and on growth, which the dashboard says
+  outright instead of hiding.
 - **Launch odds**: P(launch in 12m / 24m) from the snapshot's cross-section — the cumulative
   launched share by age, smoothed by monotone interpolation across the bucket edges.
-- **80% range**: implied × exp(±1.28 × residual sd), from the fitted model's leave-one-out
-  residuals (per-category sd where a category has ≥8 live comps, else the global sd).
+- **80% range**: implied × exp(±half-width), where the half-width is the 80th percentile
+  of the absolute leave-one-out residuals (conformal-style). The old 1.28×sd shortcut
+  over-covered (84%) and ran wider; the percentile covers ~81% at a narrower width.
 - **Costed farm verdicts**: farm cost = gas on the main chain + capital + the farmer's time
   at $25/hour; minimum viable capital is the capital part. Verdict: FARM when
   P(12m) × implied × 0.1% ≥ cost, else SKIP. The 0.1% airdrop-share assumption is printed

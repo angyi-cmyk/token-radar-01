@@ -34,9 +34,9 @@
     worse than guessing the mean — which is why it was replaced.</p>
     <ol class="method-points">
       <li><b>TVL is the anchor, fitted.</b> The slope on log(TVL) is estimated from live tokens, so a protocol holding more value implies a larger token, but less than proportionally.</li>
-      <li><b>Category offsets are shrunk.</b> Each category&rsquo;s median residual is pulled toward zero by n/(n+3), so a thin category cannot swing a row on one or two comparables.</li>
+      <li><b>Category offsets are shrunk.</b> Each category&rsquo;s median residual is pulled toward zero by n/(n+8), so a thin category cannot swing a row on one or two comparables.</li>
       <li><b>Launch odds come from the peers&rsquo; record.</b> The share of protocols that have launched, by age, gives P(launch in 12m / 24m) for each pre-token protocol.</li>
-      <li><b>Ranges are shown, not hidden.</b> The 80% interval comes from the model&rsquo;s leave-one-out residuals — about &plusmn;2.5 log units — so a wide range is a wide range.</li>
+      <li><b>Ranges are shown, not hidden.</b> The 80% interval is the 80th percentile of the absolute leave-one-out residuals, so a wide range is a wide range.</li>
       <li><b>Farm verdicts are costed.</b> Gas plus capital plus the farmer&rsquo;s time at $25/hour, against P(12m) &times; implied value &times; 0.1% assumed airdrop share: FARM only when the expected value covers the cost.</li>
     </ol>
     <p class="method-caveat">Implied value is a model, not a price and not a promise. A protocol on this board may never

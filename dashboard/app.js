@@ -1,4 +1,4 @@
-// Token Radar's console dashboard (radar-3). It reads window.RADAR (written beside dashboard/ by
+// Token Radar's console dashboard (radar-4). It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with the
 // fitted model's own inputs, launch odds, intervals and the costed farm plan. No network: every byte
 // it shows is in data.js.
@@ -537,9 +537,9 @@
         el('br'),
         'implied = round(exp(log(mcap))) — the slope is fitted, not assumed: value grows sublinearly with TVL (', el('b', { text: f.slope.toFixed(2) }), ', not 1.0).'
       ),
-      el('p', { class: 'sub', text: 'Fit on ' + f.n_comps + ' live-token comparables (market cap > 0, TVL > 0, known listing date). The category offset is the category\u2019s median residual, shrunk toward 0 by n/(n+3); a category with no live comparable gets 0. The 80% range is implied x exp(±1.28 x residual sd), with sd ' + f.loo_resid_sd.toFixed(2) + ' log units from the fitted model\u2019s leave-one-out residuals (per-category sd where a category has 8 or more live comps, else the global sd) — the ranges are wide, and they are shown honestly.' }),
+      el('p', { class: 'sub', text: 'Fit on ' + f.n_comps + ' live-token comparables (market cap > 0, TVL > 0, known listing date). The category offset is the category\u2019s median residual, shrunk toward 0 by n/(n+8); a category with no live comparable gets 0. The 80% range is implied x exp(±' + f.interval_half_width_log.toFixed(2) + ' log units), the 80th percentile of the absolute leave-one-out residuals — it covers ' + Math.round(f.interval_coverage * 100) + '% of held-out comparables. The ranges are wide, and they are shown honestly.' }),
       ledgerTable(),
-      el('p', { class: 'sub', text: 'Walk-forward: comps sorted by listed_at, newest first; the model is fit on the first half and tested on the second. Leave-one-out refits without the held-out protocol, category offsets included. The old radar-2 formula scores ' + fmtR2(DATA.baseline.loo_r2) + ' leave-one-out on the same comps — worse than guessing the mean — which is why it was replaced.' }),
+      el('p', { class: 'sub', text: 'Walk-forward: comps sorted by listed_at, oldest first; the model is fit on the older half and tested on the newer half — the direction a launch radar actually faces. (radar-3 had this backwards: it fit the newer half and tested the older.) Leave-one-out refits without the held-out protocol, category offsets included. A term is KEPT only when adding it raises leave-one-out R² over the log-TVL base — and the two blind tests do not always agree: the category offset wins on leave-one-out but loses on walk-forward, growth wins on walk-forward but loses on leave-one-out, so both numbers are shown and the verdict follows leave-one-out. The old radar-2 formula scores ' + fmtR2(DATA.baseline.loo_r2) + ' leave-one-out on the same comps — worse than guessing the mean — which is why it was replaced.' }),
       el('h3', { text: 'Launch odds' }),
       el('p', { class: 'sub', text: 'P(launch in 12m / 24m) comes from the cross-section above: the cumulative launched share F(age), smoothed by monotone interpolation across the bucket edges, then P = [F(age + 12m) − F(age)] / [1 − F(age)]. A protocol with no listing date uses 365 days. This is a cross-sectional estimate from one snapshot, not a forecast.' }),
       oddsTable(),

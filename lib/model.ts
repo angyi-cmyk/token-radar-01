@@ -1,26 +1,36 @@
-// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked board out.
 //
-// radar-3 replaces radar-2's hand-set formula with a model fitted at runtime from the sealed
+// radar-4 replaces radar-2's hand-set formula with a model fitted at runtime from the sealed
 // snapshot's own live-token comparables, and it shows the evidence for every term it keeps:
 //
 //   value   log(mcap) = a + b·log(TVL) + catOffset, fit by OLS on the live-token comps
 //           (mcap > 0, tvl > 0, known listing date). b is fitted, not assumed: on the dev
 //           snapshot it comes out near 0.46, sublinear, not 1.0. catOffset is the category's
-//           median residual, shrunk toward 0 by n/(n+3); a category with no live comp gets 0.
+//           median residual, shrunk toward 0 by n/(n+8); a category with no live comp gets 0.
+//           The shrinkage was raised from 3 to 8 in radar-4: on the dev snapshot the stronger
+//           shrinkage raises LOO R² (0.148 → 0.153) and improves walk-forward (R² −0.066 → −0.025,
+//           rho 0.274 → 0.310), because small-n category offsets are mostly noise.
 //           implied = max(1, round(exp(a + b·log(TVL) + catOffset))).
 //   ledger  every candidate term (log TVL, category offset, growth, log-age, log-chains) is
 //           tested held-out: leave-one-out R² (refitting without the held-out protocol) and
-//           walk-forward R²/rho (comps sorted by listed_at, newest first; fit on the first
-//           half, test on the second — the same split the reference analysis uses). A term is
-//           KEPT only when adding it raises LOO R² over the log-TVL base; the ledger also
-//           reports radar-2's own LOO R² on the same comps as the baseline row.
+//           walk-forward R²/rho (comps sorted by listed_at, OLDEST first; fit on the older
+//           half, test on the newer half — the direction a launch radar actually faces).
+//           radar-3 had this backwards (fit the newer half, tested the older); radar-4 fixes
+//           the split and says so on the dashboard. A term is KEPT only when adding it raises
+//           LOO R² over the log-TVL base; the ledger also reports radar-2's own LOO R² on the
+//           same comps as the baseline row. The two blind tests disagree on two terms and the
+//           ledger shows both numbers: the category offset wins on LOO but loses on
+//           walk-forward, growth wins on walk-forward but loses on LOO — the verdict follows
+//           LOO, stated on the dashboard, so the disagreement is visible, not hidden.
 //   odds    P(launch in 12m / 24m) from the snapshot's cross-section: the cumulative launch
 //           fraction F(age) = live / (live + pre-token) among protocols with a known age, in
 //           age buckets, smoothed by monotone piecewise-linear interpolation across the bucket
 //           edges; P(launch in next 12m | pre-token at age a) = [F(a+365) − F(a)] / [1 − F(a)].
-//   range   80% intervals from the fitted model's leave-one-out residuals: per-category
-//           residual sd where the category has ≥8 live comps, else the global residual sd;
-//           interval = implied × exp(±1.28·sd).
+//   range   80% intervals, conformal-style, from the fitted model's leave-one-out residuals:
+//           the half-width is the 80th percentile of the absolute LOO residuals (one global
+//           value, not 1.28×sd — the residuals are heavy-tailed, so the normal shortcut
+//           over-covered at 84% and ran wider; the percentile covers 81% at a narrower width).
+//           interval = implied × exp(±halfWidth).
 //   farm    each farm plan is costed: gas on the main chain + the capital the position needs +
 //           the farmer's time at $25/hour (stated on the dashboard). The verdict is FARM when
 //           P(12m) × implied × 0.1% ≥ cost, else SKIP; the 0.1% airdrop-share assumption is
@@ -59,18 +69,16 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-/** The radar-3 constants, as the dashboard states them. */
+/** The radar-4 constants, as the dashboard states them. */
 export interface ModelConstants {
-  /** Shrinkage pseudo-count for a category's median-residual offset: offset × n/(n+3). */
+  /** Shrinkage pseudo-count for a category's median-residual offset: offset × n/(n+8). */
   cat_shrink: number;
   /** The farmer's time is valued at this many dollars per hour (a stated convention). */
   hourly_rate_usd: number;
   /** The airdrop-share assumption behind every farm verdict: 0.1% of implied value. */
   airdrop_share: number;
-  /** The z-value of the 80% interval. */
-  interval_z: number;
-  /** A category needs this many live comps for its own residual sd; else the global sd. */
-  min_cat_n_for_sd: number;
+  /** The interval half-width is this quantile of the absolute leave-one-out residuals. */
+  interval_quantile: number;
   /** Age in days used when a protocol's listing date is unknown. */
   unknown_age_days: number;
   /** Growth is clamped to this range (percent) before it enters a candidate term. */
@@ -79,18 +87,17 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  cat_shrink: 3,
+  cat_shrink: 8,
   hourly_rate_usd: 25,
   airdrop_share: 0.001,
-  interval_z: 1.28,
-  min_cat_n_for_sd: 8,
+  interval_quantile: 0.8,
   unknown_age_days: 365,
   growth_floor: -60,
   growth_cap: 120,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -115,6 +122,10 @@ export interface FittedModel {
   wf_rho: number;
   /** Population sd of the fitted model's leave-one-out residuals, in log units. */
   loo_resid_sd: number;
+  /** The 80% interval's half-width in log units: the 80th percentile of |LOO residuals|. */
+  interval_half_width_log: number;
+  /** The share of held-out comps whose |LOO residual| falls inside that half-width. */
+  interval_coverage: number;
   cat_offsets: CategoryOffset[];
 }
 
@@ -315,6 +326,18 @@ function pstdev(values: number[]): number {
   return Math.sqrt(values.reduce((a, v) => a + (v - m) * (v - m), 0) / values.length);
 }
 
+/** The q-th quantile of a list of numbers (nearest-rank, deterministic). */
+function quantile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+}
+
+/** The 80% interval's half-width in log units: the 80th percentile of the absolute LOO residuals. */
+function intervalHalfWidth(looResids: number[], model: ModelConstants): number {
+  return quantile(looResids.map((r) => Math.abs(r)), model.interval_quantile);
+}
+
 /** R² of predictions against targets (1 − SS_res/SS_tot). */
 function r2Of(y: number[], pred: number[]): number {
   const my = mean(y);
@@ -458,15 +481,17 @@ function looR2(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'fitted'
 }
 
 /**
- * Walk-forward R² and Spearman rho: comps sorted by listed_at, newest first (age ascending), the
- * model fit on the first half and tested on the second — the same split the reference analysis
- * (analyze.py) uses, so the ledger numbers are directly comparable with it.
+ * Walk-forward R² and Spearman rho: comps sorted by listed_at, OLDEST first (age descending),
+ * the model fit on the older half and tested on the newer half — the direction a launch radar
+ * actually faces. radar-3 had this backwards (newest first: fit the newer half, test the older)
+ * and its dashboard said so; radar-4 fixes the split, so the ledger numbers are the honest
+ * older-to-newer ones.
  */
 function walkForward(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'fitted' | 'radar2', model: ModelConstants): { r2: number; rho: number } {
   const sorted = [...pool].sort((a, b) => {
     const aa = ageDays(asOf, a.listed_at) ?? 0;
     const bb = ageDays(asOf, b.listed_at) ?? 0;
-    return aa - bb || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+    return bb - aa || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
   });
   const h = Math.floor(sorted.length / 2);
   const train = sorted.slice(0, h);
@@ -484,7 +509,7 @@ function walkForward(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'f
 //
 // The old hand-set formula, kept only so the ledger can report its own held-out numbers on the
 // same comps: sector median multiple × growth × maturity × chains. Its constants are radar-2's,
-// not radar-3's.
+// not radar-4's.
 
 const RADAR2 = {
   growth_weight: 0.5,
@@ -825,24 +850,14 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   const buckets = oddsBuckets(snapshot);
 
   // The fitted model's leave-one-out residuals, for the intervals: one refit per comp.
+  // The 80% half-width is the 80th percentile of the absolute residuals (conformal-style):
+  // the residuals are heavy-tailed, so 1.28×sd over-covered (84%) and ran wider.
   const looPreds = comps.map((p, i) => {
     const rest = comps.filter((_, j) => j !== i);
     return predictFitted(p, rest, model);
   });
   const looResids = comps.map((p, i) => Math.log(p.mcap_usd!) - looPreds[i]!);
-  const globalSd = pstdev(looResids);
-  const byCatResids = new Map<string, number[]>();
-  comps.forEach((p, i) => {
-    const key = p.category ?? 'Other';
-    const list = byCatResids.get(key);
-    if (list === undefined) byCatResids.set(key, [looResids[i]!]);
-    else list.push(looResids[i]!);
-  });
-  const catSd = new Map<string, number>();
-  for (const [cat, resids] of byCatResids) {
-    if (resids.length >= model.min_cat_n_for_sd) catSd.set(cat, pstdev(resids));
-  }
-  const sdFor = (cat: string | null): number => catSd.get(cat ?? 'Other') ?? globalSd;
+  const halfWidth = intervalHalfWidth(looResids, model);
 
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but
@@ -862,9 +877,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const logTvl = Math.log(Math.max(p.tvl_usd, 1));
     const catOffset = offsets.get(p.category ?? 'Other') ?? 0;
     const implied = Math.max(1, Math.round(Math.exp(beta[0]! + beta[1]! * logTvl + catOffset)));
-    const sd = sdFor(p.category);
-    const low = Math.max(1, Math.round(implied * Math.exp(-model.interval_z * sd)));
-    const high = Math.max(low, Math.round(implied * Math.exp(model.interval_z * sd)));
+    const low = Math.max(1, Math.round(implied * Math.exp(-halfWidth)));
+    const high = Math.max(low, Math.round(implied * Math.exp(halfWidth)));
     const p12 = launchOdds(age, 12, buckets, model);
     const p24 = launchOdds(age, 24, buckets, model);
     const farm = farmEconomics(p, age, implied, p12, model);
@@ -931,6 +945,7 @@ export function termLedger(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const { beta, offsets } = categoryOffsets(comps, asOf, model);
   const looPreds = comps.map((p, i) => predictFitted(p, comps.filter((_, j) => j !== i), model));
   const looResids = comps.map((p, i) => Math.log(p.mcap_usd!) - looPreds[i]!);
+  const halfWidth = intervalHalfWidth(looResids, model);
   const fit: FittedModel = {
     intercept: round4(beta[0]!),
     slope: round4(beta[1]!),
@@ -939,6 +954,8 @@ export function termLedger(snapshot: Snapshot, model: ModelConstants = MODEL): {
     wf_r2: round4(catWf.r2),
     wf_rho: round4(catWf.rho),
     loo_resid_sd: round4(pstdev(looResids)),
+    interval_half_width_log: round4(halfWidth),
+    interval_coverage: round4(looResids.filter((r) => Math.abs(r) <= halfWidth).length / Math.max(looResids.length, 1)),
     cat_offsets: [...offsets.entries()]
       .map(([category, offset]) => ({ category, live_n: comps.filter((p) => (p.category ?? 'Other') === category).length, offset: round4(offset) }))
       .sort((a, b) => b.offset - a.offset || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0)),
