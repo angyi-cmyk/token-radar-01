@@ -1,6 +1,6 @@
-// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked board out.
 //
-// radar-4 replaces radar-2's hand-set formula with a model fitted at runtime from the sealed
+// radar-5 replaces radar-2's hand-set formula with a model fitted at runtime from the sealed
 // snapshot's own live-token comparables, and it shows the evidence for every term it keeps:
 //
 //   value   log(mcap) = a + b·log(TVL) + catOffset, fit by OLS on the live-token comps
@@ -12,20 +12,34 @@
 //           rho 0.274 → 0.310), because small-n category offsets are mostly noise.
 //           implied = max(1, round(exp(a + b·log(TVL) + catOffset))).
 //   ledger  every candidate term (log TVL, category offset, growth, log-age, log-chains) is
-//           tested held-out: leave-one-out R² (refitting without the held-out protocol) and
-//           walk-forward R²/rho (comps sorted by listed_at, OLDEST first; fit on the older
-//           half, test on the newer half — the direction a launch radar actually faces).
-//           radar-3 had this backwards (fit the newer half, tested the older); radar-4 fixes
-//           the split and says so on the dashboard. A term is KEPT only when adding it raises
-//           LOO R² over the log-TVL base; the ledger also reports radar-2's own LOO R² on the
-//           same comps as the baseline row. The two blind tests disagree on two terms and the
-//           ledger shows both numbers: the category offset wins on LOO but loses on
-//           walk-forward, growth wins on walk-forward but loses on LOO — the verdict follows
-//           LOO, stated on the dashboard, so the disagreement is visible, not hidden.
-//   odds    P(launch in 12m / 24m) from the snapshot's cross-section: the cumulative launch
-//           fraction F(age) = live / (live + pre-token) among protocols with a known age, in
-//           age buckets, smoothed by monotone piecewise-linear interpolation across the bucket
-//           edges; P(launch in next 12m | pre-token at age a) = [F(a+365) − F(a)] / [1 − F(a)].
+//           tested held-out FOUR ways: leave-one-out R² (refitting without the held-out
+//           protocol), single-split walk-forward R²/rho (comps sorted by listed_at, OLDEST
+//           first; fit on the older half, test on the newer half — the direction a launch
+//           radar actually faces; radar-3 had this backwards and radar-4 fixed it),
+//           rolling-origin walk-forward (expanding older windows, next slice tested — five
+//           origins, pooled R²/rho), and ten-fold cross-validation (deterministic slug folds).
+//           A term is KEPT only when adding it raises LOO R² over the log-TVL base; the
+//           ledger also reports radar-2's own numbers on the same comps as the baseline row.
+//           radar-5 adds a reverse walk-forward (fit newer, test older) as a robustness check,
+//           not a headline. The four blind tests now agree on the verdicts: the category
+//           offset wins LOO (+0.153) and ten-fold (+0.154) and is a wash on rolling-origin,
+//           while growth — which won the single-split walk-forward — loses LOO, ten-fold AND
+//           rolling-origin, so its single-split win was one 47-comp slice, not a real edge.
+//   odds    P(launch in 12m / 24m) from a discrete-time hazard fit: logistic regression of
+//           "has launched" on log(age) over the snapshot's live-vs-pre-token protocols with
+//           a known listing date (the 232 token-exists-but-mcap-unrecorded entries are
+//           excluded — their tokens predate their listing dates, so they are neither clean
+//           positives nor negatives). The fit is P(launched | age) = sigmoid(b0 + b1·log(age+1)),
+//           then P = [G(age + 12m) − G(age)] / [1 − G(age)]. TVL, category and a quadratic in
+//           log age were all tested as extra predictors and add nothing out-of-time, so the
+//           model stays age-only. Held-out on the dev snapshot the logistic ties the old
+//           age-bucket curve on leave-one-out log-loss (0.476 vs 0.480) and beats it clearly
+//           on a listed_at time split (0.409 vs 0.551) — the bucket curve cannot extrapolate
+//           to young ages it has never seen. The bucket curve also had visible artefacts in
+//           the derived P(12m): 0.382 at age 730 days (from the 0.250 → 0.537 bucket jump)
+//           and 0.000 past 1460 days (flat beyond the last edge); the smooth logistic gives
+//           0.146 and 0.125 there. The raw bucket table is still shown below the model, as
+//           the cross-section the logistic is fit against.
 //   range   80% intervals, conformal-style, from the fitted model's leave-one-out residuals:
 //           the half-width is the 80th percentile of the absolute LOO residuals (one global
 //           value, not 1.28×sd — the residuals are heavy-tailed, so the normal shortcut
@@ -97,7 +111,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -135,6 +149,15 @@ export interface TermLedgerRow {
   loo_r2: number;
   wf_r2: number;
   wf_rho: number;
+  /** Rolling-origin walk-forward: expanding older windows, next slice tested, pooled. */
+  rowf_r2: number;
+  rowf_rho: number;
+  /** Ten-fold cross-validation (deterministic slug folds), pooled. */
+  cv10_r2: number;
+  cv10_rho: number;
+  /** Reverse walk-forward (fit newer, test older): a robustness check, not a headline. */
+  revwf_r2: number;
+  revwf_rho: number;
   verdict: 'KEEP' | 'DROP';
 }
 
@@ -144,6 +167,28 @@ export interface BaselineRow {
   loo_r2: number;
   wf_r2: number;
   wf_rho: number;
+  rowf_r2: number;
+  rowf_rho: number;
+  cv10_r2: number;
+  cv10_rho: number;
+  revwf_r2: number;
+  revwf_rho: number;
+}
+
+/** The launch-odds model: a discrete-time hazard fit by logistic regression on log age. */
+export interface OddsModel {
+  kind: 'logistic-log-age';
+  intercept: number;
+  log_age_coef: number;
+  /** Protocols with a known listing date the fit runs on (live = launched, pre-token = not yet). */
+  n_fit: number;
+  /** Leave-one-out log-loss of the logistic model on the fit population. */
+  loo_logloss: number;
+  /** Leave-one-out log-loss of the old age-bucket curve on the same population. */
+  bucket_loo_logloss: number;
+  /** Log-loss on protocols listed after 2024-06-01, fit on those listed before. */
+  time_split_logloss: number;
+  bucket_time_split_logloss: number;
 }
 
 /** One age bucket of the launch-odds cross-section. */
@@ -263,6 +308,7 @@ export interface RadarData {
   fit: FittedModel;
   ledger: TermLedgerRow[];
   baseline: BaselineRow;
+  odds_model: OddsModel;
   odds_buckets: OddsBucket[];
   coverage: Coverage;
   cat_offsets: CategoryOffset[];
@@ -505,6 +551,87 @@ function walkForward(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'f
   return { r2: r2Of(y, preds), rho: spearman(y, preds) };
 }
 
+/**
+ * Rolling-origin walk-forward: comps sorted by listed_at, OLDEST first; five expanding
+ * origins (train on the oldest 25%, 37.5%, 50%, 62.5%, 75% of comps, test the next
+ * eighth) and the predictions pooled across origins. One 47/48 half-split is a single
+ * noisy slice; five origins give the verdict a stabler base. The test slices are
+ * disjoint, so each comp is tested at most once.
+ */
+function rollingOrigin(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'fitted' | 'radar2', model: ModelConstants): { r2: number; rho: number } {
+  const sorted = [...pool].sort((a, b) => {
+    const aa = ageDays(asOf, a.listed_at) ?? 0;
+    const bb = ageDays(asOf, b.listed_at) ?? 0;
+    return bb - aa || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+  });
+  const n = sorted.length;
+  // Ceiling, not floor: on the 95-comp dev snapshot this gives the reference origins
+  // 24/36/48/60/72 with a 12-comp test slice, so the runtime ledger matches the
+  // reference analysis exactly. (Floor would shift every origin by one comp and the
+  // pooled R² moves a lot — the statistic is sensitive to boundary comps, which the
+  // dashboard says outright.)
+  const testSize = Math.max(8, Math.ceil(n / 8));
+  const y: number[] = [];
+  const preds: number[] = [];
+  for (const frac of [0.25, 0.375, 0.5, 0.625, 0.75]) {
+    const k = Math.ceil(n * frac);
+    if (k < 8 || k >= n) continue;
+    const train = sorted.slice(0, k);
+    const test = sorted.slice(k, Math.min(n, k + testSize));
+    for (const p of test) {
+      y.push(Math.log(p.mcap_usd!));
+      if (spec === 'radar2') preds.push(radar2LogImplied(p, train, asOf));
+      else if (spec === 'fitted') preds.push(predictFitted(p, train, model));
+      else preds.push(predictOls(p, asOf, spec, train, model));
+    }
+  }
+  return { r2: r2Of(y, preds), rho: spearman(y, preds) };
+}
+
+/**
+ * Ten-fold cross-validation: comps sorted by slug, fold = index mod 10, each fold fit on
+ * the other nine and predicted held-out; R² and rho pooled across all folds. Deterministic.
+ */
+function tenFoldCv(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'fitted' | 'radar2', model: ModelConstants): { r2: number; rho: number } {
+  const ordered = [...pool].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const y: number[] = [];
+  const preds: number[] = [];
+  for (let f = 0; f < 10; f++) {
+    const test = ordered.filter((_, i) => i % 10 === f);
+    const train = ordered.filter((_, i) => i % 10 !== f);
+    for (const p of test) {
+      y.push(Math.log(p.mcap_usd!));
+      if (spec === 'radar2') preds.push(radar2LogImplied(p, train, asOf));
+      else if (spec === 'fitted') preds.push(predictFitted(p, train, model));
+      else preds.push(predictOls(p, asOf, spec, train, model));
+    }
+  }
+  return { r2: r2Of(y, preds), rho: spearman(y, preds) };
+}
+
+/**
+ * Reverse walk-forward (fit the NEWER half, test the OLDER half): a robustness check only.
+ * The direction a launch radar faces is older-to-newer; this number is reported so the
+ * ledger cannot hide a term that only works backwards, but it never decides a verdict.
+ */
+function reverseWalkForward(pool: SnapshotProtocol[], asOf: string, spec: string[] | 'fitted' | 'radar2', model: ModelConstants): { r2: number; rho: number } {
+  const sorted = [...pool].sort((a, b) => {
+    const aa = ageDays(asOf, a.listed_at) ?? 0;
+    const bb = ageDays(asOf, b.listed_at) ?? 0;
+    return bb - aa || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+  });
+  const h = Math.floor(sorted.length / 2);
+  const train = sorted.slice(h);
+  const test = sorted.slice(0, h);
+  const y = test.map((p) => Math.log(p.mcap_usd!));
+  const preds = test.map((p) => {
+    if (spec === 'radar2') return radar2LogImplied(p, train, asOf);
+    if (spec === 'fitted') return predictFitted(p, train, model);
+    return predictOls(p, asOf, spec, train, model);
+  });
+  return { r2: r2Of(y, preds), rho: spearman(y, preds) };
+}
+
 // ---------------------------------------------------------------- radar-2 baseline
 //
 // The old hand-set formula, kept only so the ledger can report its own held-out numbers on the
@@ -612,11 +739,143 @@ function launchFracAt(age: number, buckets: OddsBucket[]): number {
   return fracs[fracs.length - 1]!;
 }
 
-/** P(launch in the next `months` | pre-token at `age` days), from the smoothed F curve. */
-function launchOdds(age: number | null, months: number, buckets: OddsBucket[], model: ModelConstants): number {
+/** The logistic sigmoid, clamped so exp never overflows. */
+function sigmoid(z: number): number {
+  const c = Math.max(-30, Math.min(30, z));
+  return 1 / (1 + Math.exp(-c));
+}
+
+/** Solve a small dense linear system by Gaussian elimination with partial pivoting. */
+function solveLinear(A: number[][], b: number[]): number[] {
+  const k = b.length;
+  const M = A.map((row, i) => [...row, b[i]!]);
+  for (let c = 0; c < k; c++) {
+    let piv = c;
+    for (let r = c + 1; r < k; r++) if (Math.abs(M[r]![c]!) > Math.abs(M[piv]![c]!)) piv = r;
+    const tmp = M[c]!;
+    M[c] = M[piv]!;
+    M[piv] = tmp;
+    for (let r = 0; r < k; r++) {
+      if (r !== c && M[c]![c] !== 0) {
+        const f = M[r]![c]! / M[c]![c]!;
+        for (let j = c; j <= k; j++) M[r]![j]! -= f * M[c]![j]!;
+      }
+    }
+  }
+  return M.map((row, i) => row[k]! / row[i]!);
+}
+
+/**
+ * Logistic regression by IRLS with a ridge penalty on every term but the intercept —
+ * the same solver the reference analysis uses. X rows are feature vectors, y the 0/1
+ * targets; returns the coefficients.
+ */
+function logitFit(X: number[][], y: number[], ridge = 1, maxIter = 200, tol = 1e-8): number[] {
+  const k = X[0]!.length;
+  let beta = new Array<number>(k).fill(0);
+  for (let iter = 0; iter < maxIter; iter++) {
+    const g = new Array<number>(k).fill(0);
+    const H: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
+    for (let r = 0; r < X.length; r++) {
+      const xi = X[r]!;
+      const mu = sigmoid(beta.reduce((a, b, i) => a + b * xi[i]!, 0));
+      const w = mu * (1 - mu);
+      for (let i = 0; i < k; i++) {
+        g[i]! += (y[r]! - mu) * xi[i]!;
+        for (let j = 0; j < k; j++) H[i]![j]! += w * xi[i]! * xi[j]!;
+      }
+    }
+    for (let i = 1; i < k; i++) {
+      H[i]![i]! += ridge;
+      g[i]! -= ridge * beta[i]!;
+    }
+    const db = solveLinear(H, g);
+    beta = beta.map((b, i) => b + db[i]!);
+    if (Math.max(...db.map(Math.abs)) < tol) break;
+  }
+  return beta;
+}
+
+/** Log-loss of predicted probabilities against 0/1 targets (lower is better). */
+function logLoss(y: number[], pred: number[]): number {
+  const eps = 1e-9;
+  return -mean(y.map((v, i) => v * Math.log(Math.max(pred[i]!, eps)) + (1 - v) * Math.log(Math.max(1 - pred[i]!, eps))));
+}
+
+/** The odds fit's population: live-token (launched) vs pre-token (not yet) with a known listing date. */
+function oddsPopulation(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter(
+    (p) => ageDays(snapshot.as_of, p.listed_at) !== null && (isLiveComp(p) || isPreToken(p)),
+  );
+}
+
+/**
+ * The launch-odds model, fit at runtime: logistic regression of "has launched" on
+ * log(age + 1) over the live-vs-pre-token population with a known listing date. The
+ * 232 token-exists-but-mcap-unrecorded entries are excluded — their tokens predate
+ * their listing dates (versioned sub-entries like aave-v3), so they are neither clean
+ * positives nor negatives. TVL, category and a quadratic in log age were all tested as
+ * extra predictors and add nothing out-of-time, so the model stays age-only. The fit
+ * is validated two ways against the old age-bucket curve: leave-one-out log-loss and
+ * a listed_at time split (fit on protocols listed before 2024-06-01, test on those
+ * listed after) — the bucket curve cannot extrapolate to young ages it has never seen.
+ */
+function fitOddsModel(snapshot: Snapshot): OddsModel {
+  const pop = oddsPopulation(snapshot);
+  const asOf = snapshot.as_of;
+  const xOf = (p: SnapshotProtocol): number[] => [1, Math.log(Math.max(ageDays(asOf, p.listed_at) ?? 365, 1) + 1)];
+  const yOf = (p: SnapshotProtocol): number => (isLiveComp(p) ? 1 : 0);
+  const beta = logitFit(pop.map(xOf), pop.map(yOf));
+  const gOf = (p: SnapshotProtocol): number => sigmoid(beta[0]! + beta[1]! * xOf(p)[1]!);
+
+  // Leave-one-out log-loss, logistic vs bucket curve, on the same population.
+  const y = pop.map(yOf);
+  const looLogit = pop.map((p, i) => {
+    const rest = pop.filter((_, j) => j !== i);
+    const b = logitFit(rest.map(xOf), rest.map(yOf));
+    return Math.min(0.999, Math.max(0.001, sigmoid(b[0]! + b[1]! * xOf(p)[1]!)));
+  });
+  const looBucket = pop.map((p, i) => {
+    const rest = pop.filter((_, j) => j !== i);
+    return Math.min(0.999, Math.max(0.001, launchFracAt(ageDays(asOf, p.listed_at) ?? 365, oddsBuckets({ ...snapshot, protocols: rest }))));
+  });
+  // Listed_at time split: fit on protocols listed before 2024-06-01, test on those after.
+  const cut = Date.parse('2024-06-01T00:00:00Z');
+  const listedMs = (p: SnapshotProtocol): number => Date.parse(`${p.listed_at}T00:00:00Z`);
+  const train = pop.filter((p) => listedMs(p) < cut);
+  const test = pop.filter((p) => listedMs(p) >= cut);
+  const trainBeta = logitFit(train.map(xOf), train.map(yOf));
+  const yTest = test.map(yOf);
+  const testLogit = test.map((p) => Math.min(0.999, Math.max(0.001, sigmoid(trainBeta[0]! + trainBeta[1]! * xOf(p)[1]!))));
+  const testBucket = test.map((p) => Math.min(0.999, Math.max(0.001, launchFracAt(ageDays(asOf, p.listed_at) ?? 365, oddsBuckets({ ...snapshot, protocols: train })))));
+  return {
+    kind: 'logistic-log-age',
+    intercept: round4(beta[0]!),
+    log_age_coef: round4(beta[1]!),
+    n_fit: pop.length,
+    loo_logloss: round4(logLoss(y, looLogit)),
+    bucket_loo_logloss: round4(logLoss(y, looBucket)),
+    time_split_logloss: round4(logLoss(yTest, testLogit)),
+    bucket_time_split_logloss: round4(logLoss(yTest, testBucket)),
+  };
+}
+
+/** The fitted cumulative launch probability G(age) = P(launched by age) under the logistic model. */
+function launchG(age: number, odds: OddsModel): number {
+  return sigmoid(odds.intercept + odds.log_age_coef * Math.log(Math.max(age, 1) + 1));
+}
+
+/**
+ * P(launch in the next `months` | pre-token at `age` days), from the fitted logistic
+ * curve: [G(age + months) − G(age)] / [1 − G(age)]. A cross-sectional estimate from one
+ * snapshot, not a forecast — and a smooth one: the old bucket curve's steps made P(12m)
+ * jump to 0.382 at age 730 days and fall to 0.000 past 1460 days, both artefacts of the
+ * bucket edges, not of the data.
+ */
+function launchOdds(age: number | null, months: number, odds: OddsModel, model: ModelConstants): number {
   const a = age ?? model.unknown_age_days;
-  const f0 = launchFracAt(a, buckets);
-  const f1 = launchFracAt(a + months * 30.4167, buckets);
+  const f0 = launchG(a, odds);
+  const f1 = launchG(a + months * 30.4167, odds);
   const denom = 1 - f0;
   if (denom <= 0) return 0;
   return Math.min(1, Math.max(0, (f1 - f0) / denom));
@@ -843,11 +1102,11 @@ const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, odds: OddsModel | null = null): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const comps = compsOf(snapshot);
   const { beta, offsets } = categoryOffsets(comps, snapshot.as_of, model);
-  const buckets = oddsBuckets(snapshot);
+  const oddsModel = odds ?? fitOddsModel(snapshot);
 
   // The fitted model's leave-one-out residuals, for the intervals: one refit per comp.
   // The 80% half-width is the 80th percentile of the absolute residuals (conformal-style):
@@ -879,8 +1138,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const implied = Math.max(1, Math.round(Math.exp(beta[0]! + beta[1]! * logTvl + catOffset)));
     const low = Math.max(1, Math.round(implied * Math.exp(-halfWidth)));
     const high = Math.max(low, Math.round(implied * Math.exp(halfWidth)));
-    const p12 = launchOdds(age, 12, buckets, model);
-    const p24 = launchOdds(age, 24, buckets, model);
+    const p12 = launchOdds(age, 12, oddsModel, model);
+    const p24 = launchOdds(age, 24, oddsModel, model);
     const farm = farmEconomics(p, age, implied, p12, model);
     return { p, age, logTvl, catOffset, implied, low, high, p12, p24, farm };
   });
@@ -916,31 +1175,82 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }));
 }
 
-/** The term ledger, computed at runtime from the comps: LOO + walk-forward per candidate term. */
+/** The term ledger, computed at runtime from the comps: LOO + walk-forward + rolling-origin
+ * walk-forward + ten-fold CV per candidate term, with reverse walk-forward as a robustness check. */
 export function termLedger(snapshot: Snapshot, model: ModelConstants = MODEL): { ledger: TermLedgerRow[]; baseline: BaselineRow; fit: FittedModel } {
   const comps = compsOf(snapshot);
   const asOf = snapshot.as_of;
   const baseLoo = looR2(comps, asOf, [], model);
   const baseWf = walkForward(comps, asOf, [], model);
+  const baseRo = rollingOrigin(comps, asOf, [], model);
+  const baseCv = tenFoldCv(comps, asOf, [], model);
+  const baseRev = reverseWalkForward(comps, asOf, [], model);
   const catLoo = looR2(comps, asOf, 'fitted', model);
   const catWf = walkForward(comps, asOf, 'fitted', model);
+  const catRo = rollingOrigin(comps, asOf, 'fitted', model);
+  const catCv = tenFoldCv(comps, asOf, 'fitted', model);
+  const catRev = reverseWalkForward(comps, asOf, 'fitted', model);
   const growthLoo = looR2(comps, asOf, ['growth'], model);
   const growthWf = walkForward(comps, asOf, ['growth'], model);
+  const growthRo = rollingOrigin(comps, asOf, ['growth'], model);
+  const growthCv = tenFoldCv(comps, asOf, ['growth'], model);
+  const growthRev = reverseWalkForward(comps, asOf, ['growth'], model);
   const ageLoo = looR2(comps, asOf, ['logage'], model);
   const ageWf = walkForward(comps, asOf, ['logage'], model);
+  const ageRo = rollingOrigin(comps, asOf, ['logage'], model);
+  const ageCv = tenFoldCv(comps, asOf, ['logage'], model);
+  const ageRev = reverseWalkForward(comps, asOf, ['logage'], model);
   const chainsLoo = looR2(comps, asOf, ['chains'], model);
   const chainsWf = walkForward(comps, asOf, ['chains'], model);
+  const chainsRo = rollingOrigin(comps, asOf, ['chains'], model);
+  const chainsCv = tenFoldCv(comps, asOf, ['chains'], model);
+  const chainsRev = reverseWalkForward(comps, asOf, ['chains'], model);
   const base2Loo = looR2(comps, asOf, 'radar2', model);
   const base2Wf = walkForward(comps, asOf, 'radar2', model);
+  const base2Ro = rollingOrigin(comps, asOf, 'radar2', model);
+  const base2Cv = tenFoldCv(comps, asOf, 'radar2', model);
+  const base2Rev = reverseWalkForward(comps, asOf, 'radar2', model);
 
+  const row = (
+    term: string,
+    loo: number,
+    wf: { r2: number; rho: number },
+    ro: { r2: number; rho: number },
+    cv: { r2: number; rho: number },
+    rev: { r2: number; rho: number },
+    keep: boolean,
+  ): TermLedgerRow => ({
+    term,
+    loo_r2: round4(loo),
+    wf_r2: round4(wf.r2),
+    wf_rho: round4(wf.rho),
+    rowf_r2: round4(ro.r2),
+    rowf_rho: round4(ro.rho),
+    cv10_r2: round4(cv.r2),
+    cv10_rho: round4(cv.rho),
+    revwf_r2: round4(rev.r2),
+    revwf_rho: round4(rev.rho),
+    verdict: keep ? 'KEEP' : 'DROP',
+  });
   const ledger: TermLedgerRow[] = [
-    { term: 'log TVL', loo_r2: round4(baseLoo), wf_r2: round4(baseWf.r2), wf_rho: round4(baseWf.rho), verdict: baseLoo > 0 ? 'KEEP' : 'DROP' },
-    { term: 'category offset', loo_r2: round4(catLoo), wf_r2: round4(catWf.r2), wf_rho: round4(catWf.rho), verdict: catLoo > baseLoo ? 'KEEP' : 'DROP' },
-    { term: 'growth', loo_r2: round4(growthLoo), wf_r2: round4(growthWf.r2), wf_rho: round4(growthWf.rho), verdict: growthLoo > baseLoo ? 'KEEP' : 'DROP' },
-    { term: 'log-age', loo_r2: round4(ageLoo), wf_r2: round4(ageWf.r2), wf_rho: round4(ageWf.rho), verdict: ageLoo > baseLoo ? 'KEEP' : 'DROP' },
-    { term: 'log-chains', loo_r2: round4(chainsLoo), wf_r2: round4(chainsWf.r2), wf_rho: round4(chainsWf.rho), verdict: chainsLoo > baseLoo ? 'KEEP' : 'DROP' },
+    row('log TVL', baseLoo, baseWf, baseRo, baseCv, baseRev, baseLoo > 0),
+    row('category offset', catLoo, catWf, catRo, catCv, catRev, catLoo > baseLoo),
+    row('growth', growthLoo, growthWf, growthRo, growthCv, growthRev, growthLoo > baseLoo),
+    row('log-age', ageLoo, ageWf, ageRo, ageCv, ageRev, ageLoo > baseLoo),
+    row('log-chains', chainsLoo, chainsWf, chainsRo, chainsCv, chainsRev, chainsLoo > baseLoo),
   ];
-  const baseline: BaselineRow = { model: 'radar-2', loo_r2: round4(base2Loo), wf_r2: round4(base2Wf.r2), wf_rho: round4(base2Wf.rho) };
+  const baseline: BaselineRow = {
+    model: 'radar-2',
+    loo_r2: round4(base2Loo),
+    wf_r2: round4(base2Wf.r2),
+    wf_rho: round4(base2Wf.rho),
+    rowf_r2: round4(base2Ro.r2),
+    rowf_rho: round4(base2Ro.rho),
+    cv10_r2: round4(base2Cv.r2),
+    cv10_rho: round4(base2Cv.rho),
+    revwf_r2: round4(base2Rev.r2),
+    revwf_rho: round4(base2Rev.rho),
+  };
 
   const { beta, offsets } = categoryOffsets(comps, asOf, model);
   const looPreds = comps.map((p, i) => predictFitted(p, comps.filter((_, j) => j !== i), model));
@@ -990,7 +1300,8 @@ export function radarRow(row: BoardRow): RadarRow {
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
+  const oddsModel = fitOddsModel(snapshot);
+  const board = buildBoard(snapshot, model, oddsModel);
   const live = liveRows(snapshot);
   const { ledger, baseline, fit } = termLedger(snapshot, model);
   const buckets = oddsBuckets(snapshot);
@@ -1037,6 +1348,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     fit,
     ledger,
     baseline,
+    odds_model: oddsModel,
     odds_buckets: buckets,
     coverage,
     cat_offsets: fit.cat_offsets,

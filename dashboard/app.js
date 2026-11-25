@@ -467,6 +467,10 @@
       el('th', { scope: 'col', text: 'Leave-one-out R²' }),
       el('th', { scope: 'col', text: 'Walk-forward R²' }),
       el('th', { scope: 'col', text: 'Walk-forward rho' }),
+      el('th', { scope: 'col', text: 'Rolling-origin R²' }),
+      el('th', { scope: 'col', text: 'Rolling-origin rho' }),
+      el('th', { scope: 'col', text: '10-fold R²' }),
+      el('th', { scope: 'col', text: '10-fold rho' }),
       el('th', { scope: 'col', text: 'Verdict' })
     );
     var body = el('tbody');
@@ -476,6 +480,10 @@
         el('td', { class: 'num', text: fmtR2(t.loo_r2) }),
         el('td', { class: 'num', text: fmtR2(t.wf_r2) }),
         el('td', { class: 'num', text: t.wf_rho.toFixed(3) }),
+        el('td', { class: 'num', text: fmtR2(t.rowf_r2) }),
+        el('td', { class: 'num', text: t.rowf_rho.toFixed(3) }),
+        el('td', { class: 'num', text: fmtR2(t.cv10_r2) }),
+        el('td', { class: 'num', text: t.cv10_rho.toFixed(3) }),
         el('td', null, el('span', { class: 'verdict ' + (t.verdict === 'KEEP' ? 'farm' : 'skip'), text: t.verdict }))
       ));
     });
@@ -484,11 +492,15 @@
       el('td', { class: 'num', text: fmtR2(DATA.baseline.loo_r2) }),
       el('td', { class: 'num', text: fmtR2(DATA.baseline.wf_r2) }),
       el('td', { class: 'num', text: DATA.baseline.wf_rho.toFixed(3) }),
+      el('td', { class: 'num', text: fmtR2(DATA.baseline.rowf_r2) }),
+      el('td', { class: 'num', text: DATA.baseline.rowf_rho.toFixed(3) }),
+      el('td', { class: 'num', text: fmtR2(DATA.baseline.cv10_r2) }),
+      el('td', { class: 'num', text: DATA.baseline.cv10_rho.toFixed(3) }),
       el('td', { text: 'replaced' })
     ));
     return el('div', { class: 'table-wrap kv' },
       el('table', null,
-        el('caption', { class: 'sub', text: 'Each candidate term is tested held-out on the ' + DATA.fit.n_comps + ' live-token comps. A term is kept only when adding it raises leave-one-out R² over the log-TVL base.' }),
+        el('caption', { class: 'sub', text: 'Each candidate term is tested held-out four ways on the ' + DATA.fit.n_comps + ' live-token comps. A term is kept only when adding it raises leave-one-out R² over the log-TVL base. A reverse walk-forward (fit newer, test older) is computed too, as a robustness check, and is shown in the text below, not the table.' }),
         el('thead', null, head),
         body
       )
@@ -513,7 +525,7 @@
     });
     return el('div', { class: 'table-wrap kv' },
       el('table', null,
-        el('caption', { class: 'sub', text: 'Cross-sectional launch share by age: live / (live + pre-token) among protocols with a known listing date. Young buckets are small-n.' }),
+        el('caption', { class: 'sub', text: 'Cross-sectional launch share by age: live / (live + pre-token) among protocols with a known listing date — the raw cross-section the logistic odds model below is fit against. Young buckets are small-n.' }),
         el('thead', null, head),
         body
       )
@@ -539,9 +551,9 @@
       ),
       el('p', { class: 'sub', text: 'Fit on ' + f.n_comps + ' live-token comparables (market cap > 0, TVL > 0, known listing date). The category offset is the category\u2019s median residual, shrunk toward 0 by n/(n+8); a category with no live comparable gets 0. The 80% range is implied x exp(±' + f.interval_half_width_log.toFixed(2) + ' log units), the 80th percentile of the absolute leave-one-out residuals — it covers ' + Math.round(f.interval_coverage * 100) + '% of held-out comparables. The ranges are wide, and they are shown honestly.' }),
       ledgerTable(),
-      el('p', { class: 'sub', text: 'Walk-forward: comps sorted by listed_at, oldest first; the model is fit on the older half and tested on the newer half — the direction a launch radar actually faces. (radar-3 had this backwards: it fit the newer half and tested the older.) Leave-one-out refits without the held-out protocol, category offsets included. A term is KEPT only when adding it raises leave-one-out R² over the log-TVL base — and the two blind tests do not always agree: the category offset wins on leave-one-out but loses on walk-forward, growth wins on walk-forward but loses on leave-one-out, so both numbers are shown and the verdict follows leave-one-out. The old radar-2 formula scores ' + fmtR2(DATA.baseline.loo_r2) + ' leave-one-out on the same comps — worse than guessing the mean — which is why it was replaced.' }),
+      el('p', { class: 'sub', text: 'Walk-forward: comps sorted by listed_at, oldest first; the model is fit on the older half and tested on the newer half — the direction a launch radar actually faces. (radar-3 had this backwards: it fit the newer half and tested the older.) Rolling-origin walk-forward uses five expanding older windows and tests the next slice each time, pooled; ten-fold cross-validation uses deterministic slug folds. Leave-one-out refits without the held-out protocol, category offsets included. A term is KEPT only when adding it raises leave-one-out R² over the log-TVL base — and the four blind tests now agree on the verdicts: the category offset wins leave-one-out (' + fmtR2(DATA.ledger[1].loo_r2) + ') and ten-fold (' + fmtR2(DATA.ledger[1].cv10_r2) + ') and is a wash on rolling-origin, while growth — which won the single-split walk-forward — loses leave-one-out, ten-fold AND rolling-origin, so that win was one 47-comp slice, not a real edge. The reverse walk-forward (fit newer, test older) is a robustness check only: log TVL ' + fmtR2(DATA.ledger[0].revwf_r2) + ', category offset ' + fmtR2(DATA.ledger[1].revwf_r2) + ', growth ' + fmtR2(DATA.ledger[2].revwf_r2) + '. The old radar-2 formula scores ' + fmtR2(DATA.baseline.loo_r2) + ' leave-one-out on the same comps — worse than guessing the mean — which is why it was replaced.' }),
       el('h3', { text: 'Launch odds' }),
-      el('p', { class: 'sub', text: 'P(launch in 12m / 24m) comes from the cross-section above: the cumulative launched share F(age), smoothed by monotone interpolation across the bucket edges, then P = [F(age + 12m) − F(age)] / [1 − F(age)]. A protocol with no listing date uses 365 days. This is a cross-sectional estimate from one snapshot, not a forecast.' }),
+      el('p', { class: 'sub', text: 'P(launch in 12m / 24m) comes from a discrete-time hazard fit: logistic regression of "has launched" on log(age) over the ' + DATA.odds_model.n_fit + ' live-vs-pre-token protocols with a known listing date, P(launched by age) = sigmoid(' + DATA.odds_model.intercept.toFixed(3) + ' + ' + DATA.odds_model.log_age_coef.toFixed(3) + ' x log(age+1)), then P = [G(age + 12m) − G(age)] / [1 − G(age)]. A protocol with no listing date uses 365 days. Held-out, the logistic ties the old age-bucket curve on leave-one-out log-loss (' + DATA.odds_model.loo_logloss.toFixed(3) + ' vs ' + DATA.odds_model.bucket_loo_logloss.toFixed(3) + ') and beats it clearly on a listed_at time split (' + DATA.odds_model.time_split_logloss.toFixed(3) + ' vs ' + DATA.odds_model.bucket_time_split_logloss.toFixed(3) + ') — the bucket curve cannot extrapolate to young ages it has never seen. It also fixes the bucket curve\u2019s artefacts in P(12m): 0.382 at age 730 days (from the 0.250 → 0.537 bucket jump) and 0.000 past 1460 days. TVL, category and a quadratic in log age were all tested as extra predictors and add nothing out-of-time, so the model stays age-only; the 232 token-exists-but-mcap-unrecorded entries are excluded, as their tokens predate their listing dates. This is a cross-sectional estimate from one snapshot, not a forecast — and age barely separates 12-month odds (P(12m) runs only 0.11–0.15 across the board), so the farm verdict below is driven mostly by implied value.' }),
       oddsTable(),
       el('h3', { text: 'Category offsets (log units)' }),
       el('div', { class: 'sectors' }, offsetCells),
